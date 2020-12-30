@@ -1,0 +1,407 @@
+---
+title: "Final"
+author: "Mark Raney"
+date: "4/20/2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(Hmisc)
+library(ggthemes)
+library(knitr)
+library(xtable)
+library(pander)
+library(GGally)
+library(Imap)
+library(ggmap)
+library(ggfortify)
+library(car)
+library(stringr)
+library(usmap)
+library(stringr)
+
+setwd("C:/Users/markr/OneDrive/Desktop/Skewl/DA/Final")
+
+tsa2014 = read.csv("2014.csv")
+tsa2002_2006 = read.csv("2002-2006Data.csv")
+tsa2007_2009 = read.csv("2007-2009.csv")
+tsa2010_2013 = read.csv("2010-2013.csv")
+tsa2015 = read.csv("2015.csv")
+airport_codes = read.csv("airport-codes.csv")
+```
+
+```{r, echo=FALSE}
+#File is about 500mb, please use caution!
+flightData = read.csv("Airports2.csv")
+```
+
+## Introduction
+
+## Ethical Consideration
+
+## Data Explanation and Exploration
+
+## Statistical Analysis and Interpretation
+
+## Conclusions
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+#Removing useless column which was causing merging errors
+tsa2014$ï..Claim.Number = NULL
+tsa2015$ï..Claim.Number = NULL
+tsa2010_2013$ï..Claim.Number = NULL
+tsa2007_2009$ï..Claim.Number = NULL
+tsa2002_2006$ï..Claim.Number = NULL
+```
+
+```{r, echo=FALSE}
+#Function to allow for merging of columns with different column names
+rbind.all.columns <- function(x, y) {
+ 
+    x.diff <- setdiff(colnames(x), colnames(y))
+    y.diff <- setdiff(colnames(y), colnames(x))
+ 
+    x[, c(as.character(y.diff))] <- NA
+ 
+    y[, c(as.character(x.diff))] <- NA
+ 
+    return(rbind(x, y))
+}
+```
+
+
+```{r, echo=FALSE}
+#Binding Columns
+tsa = rbind(tsa2002_2006, tsa2007_2009)
+tsa = rbind.all.columns(tsa, tsa2010_2013)
+tsa = rbind.all.columns(tsa, tsa2014)
+tsa = rbind.all.columns(tsa, tsa2015)
+```
+
+```{r, echo=FALSE}
+#General data wrangling
+airport_codes = airport_codes %>%
+  filter(iso_country == "US" & iata_code %in% tsa$Airport.Code & iata_code != "") %>%
+  mutate(coordinates = gsub(" ", "", coordinates))
+
+tsa = tsa %>%
+  filter(is.na(Item.Category) == FALSE & is.na(Airport.Code) == FALSE & is.na(Disposition) == FALSE & Item.Category != "-" & Disposition != "-")
+
+tsa = tsa %>%
+  mutate(Close.Amount = as.numeric(Close.Amount))
+```
+
+```{r, echo=FALSE}
+#Renaming column to allow for merging
+airport_codes = airport_codes %>%
+  mutate(long = as.numeric(gsub(",.*", "", coordinates)), lat = as.numeric(gsub(".*,", "", coordinates)))
+
+iata = airport_codes %>%
+  select(iata_code,iso_region, long, lat)
+
+iata = rename(iata, "Airport.Code"="iata_code")
+
+tsa = tsa %>%
+  group_by(Airport.Code)
+
+tsa = merge(tsa, iata, by="Airport.Code")
+
+tsa = ungroup(tsa)
+```
+
+
+```{r, echo=FALSE}
+#Extracting only two letter state code from iso regions
+tsa = tsa %>%
+  mutate(iso_region = substr(iso_region,4,5))
+
+tsa = rename(tsa, "abbr" = "iso_region")
+```
+
+```{r, echo=FALSE}
+#Modifying stateFreq so it works with usmap library
+stateFreq = table(tsa$abbr)
+stateFreq = as.data.frame(stateFreq)
+stateFreq = rename(stateFreq, "state"="Var1")
+```
+
+```{r, echo=FALSE}
+#Mapping where claims are coming from
+plot_usmap(data = stateFreq, values = "Freq", color = "red") +
+  scale_fill_continuous(low="white", high="red", name="Claims per State", label = scales::comma) +
+  theme(legend.position = "right")
+```
+
+
+```{r, echo=FALSE}
+#Combining datasets which have claim amount variable
+claimRecs = rbind(tsa2002_2006, tsa2007_2009)
+```
+
+```{r, echo=FALSE}
+#Basic data wrangling
+claimRecs = claimRecs %>%
+  filter(!is.na(Airport.Code) & Airport.Code != "") %>%
+  mutate(Claim.Amount = as.numeric(Claim.Amount), Close.Amount = as.numeric(Close.Amount))
+```
+
+```{r, echo=FALSE}
+#Creating variable for chance of return per airport
+claimRecs = claimRecs %>%
+  mutate(dispositionDummy = (ifelse(Status == "Approved" | Status == "Settled", 1, 0))) %>%
+  group_by(Airport.Code) %>%
+  mutate(chanceOfReturn = mean(dispositionDummy))
+
+claimRecs = ungroup(claimRecs)
+```
+
+```{r, echo=FALSE}
+#A few rows got corrupted where despite disposition being approve in full, Close.Amount was = to 0
+claimRecs = claimRecs %>%
+  mutate(Close.Amount = ifelse(Disposition == "Approve in Full", Claim.Amount, Close.Amount))
+```
+
+
+```{r, echo=FALSE}
+#Calculating percent returned where the claim was accepted
+claimRecsSettled = claimRecs %>%
+  filter(Disposition != "Deny" & Disposition != "") %>%
+  mutate(percentReturned = Close.Amount / Claim.Amount)
+
+#I don't know how or why this happened, but it happened
+claimRecsSettled = claimRecsSettled %>%
+  filter(percentReturned < 2)
+```
+
+```{r, echo=FALSE}
+#Creating variable for average return percent on claim type
+claimRecsSettled = claimRecsSettled %>%
+  filter(!is.na(Claim.Type)) %>%
+  group_by(Claim.Type) %>%
+  mutate(avgTypePercentReturn = mean(percentReturned))
+
+claimRecsSettled = ungroup(claimRecsSettled)
+```
+
+```{r, echo=FALSE}
+#Creating variable for average return percent on Item type
+claimRecsSettled = claimRecsSettled %>%
+  filter(!is.na(Item) & Item != "") %>%
+  mutate(Item = gsub(" .*|;.*", "", Item)) %>%
+  group_by(Item) %>%
+  mutate(avgItemPercentReturn = mean(percentReturned))
+
+claimRecsSettled = ungroup(claimRecsSettled)
+
+#Removing claims where there are fewer than 9 additional claims regarding the same item
+itemCount = table(claimRecsSettled$avgItemPercentReturn)
+itemCount = as.data.frame(itemCount)
+itemCount = rename(itemCount, "avgItemPercentReturn" = "Var1", "itemFrequency"="Freq")
+
+claimRecsSettled = merge(claimRecsSettled, itemCount, by="avgItemPercentReturn")
+claimRecsSettled = claimRecsSettled %>%
+  filter(itemFrequency >= 10)
+```
+
+```{r, echo=FALSE}
+#Finding airport average for return percent on claim type
+claimRecsSettled = claimRecsSettled %>%
+  filter(!is.na(Claim.Type) & !is.na(Airport.Code)) %>%
+  group_by(Airport.Code) %>%
+  mutate(airportAvgReturn = mean(percentReturned)) %>%
+  group_by(Claim.Type) %>%
+  mutate(airportAvgTypeReturn = mean(percentReturned))
+
+claimRecsSettled = ungroup(claimRecsSettled)
+```
+
+```{r, echo=FALSE}
+#Plotting average return by chance of return for all airports
+claimRecsSettled %>%
+  group_by(Airport.Code) %>%
+  ggplot(aes(x=chanceOfReturn, y=airportAvgReturn)) +
+  geom_point() +
+  theme_tufte() +
+  labs(x = "Probability of claim being accepted", y = "Average fraction of request returned", title = "Average return on request by probability of claim being accepted")
+```
+
+```{r, echo=FALSE}
+#Same graph, but only with airports that have over 50 points of data
+LargeAirportClaims = claimRecsSettled %>%
+  mutate(airportDummy = 1) %>%
+  group_by(Airport.Code) %>%
+  mutate(airportCount = sum(airportDummy)) %>%
+  filter(airportCount > 50)
+
+LargeAirportClaims = ungroup(LargeAirportClaims)
+
+LargeAirportClaims %>%
+  group_by(Airport.Code) %>%
+  ggplot(aes(x=chanceOfReturn, y=airportAvgReturn)) +
+  geom_point() +
+  theme_tufte() +
+  xlim(0,1) +
+  ylim(0,1) +
+  labs(x = "Probability of claim being accepted", y = "Average fraction of request returned", title = "Average return on request by probability of claim being accepted | > 50 claims made")
+```
+
+```{r, echo=FALSE}
+#Testing for normal distribution of airport average return. Results say NORMAL!
+forTTest = LargeAirportClaims %>%
+  select(airportAvgReturn)
+
+forTTest = distinct(forTTest)
+
+t.test(forTTest$airportAvgReturn, mu = 0.7951)
+```
+
+
+```{r, echo=FALSE}
+#Same graph, but with lines showing 1st and 3rd quartile of x axis
+chanceQuartiles = summary(LargeAirportClaims$chanceOfReturn)
+
+chance1st = chanceQuartiles[2]
+chance3rd = chanceQuartiles[5]
+
+LargeAirportClaims %>%
+  group_by(Airport.Code) %>%
+  ggplot(aes(x=chanceOfReturn, y=airportAvgReturn)) +
+  geom_point() +
+  theme_tufte() +
+  geom_vline(xintercept = chance1st, color = "red") +
+  geom_vline(xintercept = chance3rd, color = "blue") +
+  xlim(0,1) +
+  ylim(0,1) +
+  labs(x = "Probability of claim being accepted", y = "Average fraction of request returned", title = "Average return on request by probability of claim being accepted | > 50 claims made + Quartile Lines", caption = "Note: Leftmost line is 1st quartile and rightmost line is 3rd quartile.")
+```
+
+```{r}
+d1 = density(LargeAirportClaims$airportAvgReturn)
+plot(d1, main = "Density plot of Airports by Average Return on Claim Amount", xlim=c(0,1))
+```
+
+
+```{r, echo=FALSE}
+#Showing distribution of chanceOfReturn variable. Fairly normal!
+d2 = density(LargeAirportClaims$chanceOfReturn)
+plot(d2, main = "Density Plot of Airports by Probability of Claim being Accepted", xlim=c(0,1))
+```
+
+```{r}
+#Testing for normal distribution of chanceOfReturn. Results say normal!
+forTTest = LargeAirportClaims %>%
+  select(chanceOfReturn)
+
+forTTest = distinct(forTTest)
+
+t.test(forTTest$chanceOfReturn, mu = 0.47029)
+```
+
+```{r, echo=FALSE}
+#Creating a dataset containing the amount of passengers flown out of 
+temp = flightData %>%
+  filter(as.numeric(gsub("-.*", "", Fly_date)) >= 2002) %>%
+  filter(!is.na(Origin_airport) & Origin_airport %in% LargeAirportClaims$Airport.Code) %>%
+  group_by(Origin_airport) %>%
+  mutate(traffic = sum(Passengers))
+  
+airportTraffic = temp %>%
+  select(Origin_airport, traffic)
+
+airportTraffic = unique(airportTraffic)
+
+airportTraffic = rename(airportTraffic, "Airport.Code" = "Origin_airport")
+```
+
+```{r, echo=FALSE}
+#Generating MARK score
+MarkScore = LargeAirportClaims %>%
+  group_by(Airport.Code) %>%
+  select("Airport.Code", "Airport.Name", "chanceOfReturn", "airportAvgReturn", "airportCount")
+
+MarkScore = merge(MarkScore, airportTraffic, by="Airport.Code")
+MarkScore = MarkScore %>%
+  mutate(chanceOfClaimRequired = (airportCount / traffic)) %>%
+  mutate(MarkScore = chanceOfReturn * airportAvgReturn * (1-chanceOfClaimRequired))
+  #The reason for 1-chanceOfClaimRequired is because we want a higher value to be better for all vars
+
+MarkScore = distinct(MarkScore)
+```
+
+```{r}
+MarkScore$airportCount = NULL
+MarkScore$traffic = NULL
+
+write.csv(x=MarkScore, file="C:/Users/markr/OneDrive/Desktop/Skewl/DA/Final/MarkScore.csv")
+```
+
+
+```{r, echo=FALSE}
+#I forget if this chunk is necessary and honestly I'm too scared to get rid of it
+firstQ = filter(LargeAirportClaims, chanceOfReturn <= 0.42764)
+thirdQ = filter(LargeAirportClaims, chanceOfReturn >= 0.49638)
+```
+
+```{r, echo=FALSE}
+claimRecsSettled %>%
+  filter(Claim.Amount < 10000 & percentReturned <= 1) %>%
+  ggplot(aes(x = Claim.Amount, y = percentReturned)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method="lm") +
+  labs(x = "Claim Amount", y = "Proportion of Claim Amount Matched", title = "Relationship Between Claim Amount and Proportion of Claim Returned")
+```
+
+```{r, echo=FALSE}
+calm = lm(percentReturned ~ Claim.Amount, data = claimRecsSettled)
+summary(calm)
+```
+
+```{r, echo=FALSE}
+ctlm = lm(percentReturned ~ Claim.Type, data = claimRecsSettled)
+summary(ctlm)
+```
+
+
+```{r, echo=FALSE}
+claimRecsSettled %>%
+  filter(percentReturned <= 1 & Claim.Type != "") %>%
+  ggplot(aes(x = Claim.Type, y = percentReturned)) +
+  geom_boxplot() +
+  scale_x_discrete(labels = c("Employee Loss (MPCECA)" = "MPCECA", "Motor Vehicle" = "Vehicle", "Passenger Property Loss" = "Property Loss", "Passenger Theft" = "Theft")) +
+  labs(x = "Claim Type", y = "Proportion of Claim Matched", title = "Measuring Relationship between Claim Type and Proportion of Claim Matched")
+```
+
+```{r}
+#Generating Linear Models for prdicting chance of return and proportion returned
+lmCOR = lm(chanceOfReturn ~ Airport.Code + Claim.Amount + Claim.Type + Item, data = LargeAirportClaims)
+lmPR = lm(percentReturned ~ Airport.Code + Claim.Amount + Claim.Type + Item, data = LargeAirportClaims)
+```
+
+```{r}
+#Running Predict models on linear models from above
+data = data.frame(Airport.Code = c("LAX", "ATL", "ORD"), Claim.Amount = c(100, 100, 100), Claim.Type = c("Passenger Property Loss", "Passenger Property Loss", "Passenger Property Loss"), Item = c("Cameras", "Cameras", "Cameras"))
+
+predict(lmCOR, data)
+predict(lmPR, data)
+```
+
+```{r, echo=FALSE}
+largeAirportCords = airport_codes %>%
+  filter(iata_code %in% LargeAirportClaims$Airport.Code) %>%
+  select(iata_code, name, long, lat)
+
+largeAirportCords = rename(largeAirportCords, "Airport.Code" = "iata_code")
+
+largeAirportCords = merge(largeAirportCords, airportTraffic, by="Airport.Code")
+
+USBounds = c(left = -125, bottom = 25, right = -65, top = 50)
+airportsMap = get_stamenmap(bbox = USBounds, zoom = 5, maptype = "terrain")
+
+ggmap(airportsMap) +
+  geom_point(data = largeAirportCords, aes(x = long, y = lat, alpha = 0.5, size = traffic), color = "red") +
+  labs(x = "Longitude", y = "Latitude", title = "Location of Airports with >50 claims")
+```
+
